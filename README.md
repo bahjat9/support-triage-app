@@ -109,5 +109,18 @@ app/admin      reads the logs: calls grouped by route/prompt/API/model, runs + c
 
 ## Model comparison (Activity 8 / 10)
 
-Paste the output of `node scripts/report-results.mjs labelled100` (see `LLM-DM-report.md` section 4) and write
-three differences you observed (model name, structured-output support, latency, tokens, error messages).
+Labelled 100 tickets, 19 Oct 2026 (details and confusion matrices in [`LLM-DM-report.md`](./LLM-DM-report.md)):
+
+| Strategy | Model | Category | Priority | Avg / p50 latency | Run file |
+|---|---|---|---|---|---|
+| dm | vllm-sr/d3-flash | 86.9 % | 77.8 % | 184 / 143 ms | `runs/2026-10-19T21-22-19-dm-v1-vllm-sr_d3-flash.json` |
+| llm | gemini-3.1-flash-lite | 94.9 % | 82.7 % | 5,280 / 2,104 ms | `runs/2026-10-19T21-35-22-triage-v2-gemini-3.1-flash-lite.json` |
+
+Three differences observed:
+1. **Rate limits:** with 4 parallel requests the Gemini free tier rejected 92–95 % of tickets (429); the DM never did.
+2. **Latency:** the DM is ~15× faster at the median and has no long tail (p95 0.4 s vs 25 s).
+3. **Output:** the DM returns only labels + probabilities (0 output tokens, never malformed); the LLM writes summary and
+   action and is more accurate on the labels, but needs schema validation and failed once on one ticket (500).
+
+**Which model for which task:** DM for the fast label decision (with escalation of low-confidence tickets to the LLM),
+LLM for anything that must be written (summary, action, explanation, chat).
