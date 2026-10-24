@@ -272,6 +272,9 @@ export async function runSmoke(
   emit({ type: "start", run_id: runId, total: n, strategy: opts.strategy, models: modelName });
 
   const concurrency = Math.max(1, Number(process.env.SMOKE_CONCURRENCY) || 4);
+  // Pause between two tickets of the same worker: keeps free tiers under their
+  // requests-per-minute limit (e.g. SMOKE_CONCURRENCY=1, SMOKE_DELAY_MS=6500 ≈ 9 req/min).
+  const delayMs = Math.max(0, Number(process.env.SMOKE_DELAY_MS) || 0);
   const rows: SmokeRow[] = new Array(n);
   let next = 0;
   async function worker() {
@@ -279,6 +282,7 @@ export async function runSmoke(
       const i = next++;
       rows[i] = await runOne(tickets[i], opts.strategy, opts.configId, runId);
       emit({ type: "row", index: i, row: rows[i] });
+      if (delayMs && next < n) await new Promise((r) => setTimeout(r, delayMs));
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, n) }, worker));

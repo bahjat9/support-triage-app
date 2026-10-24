@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 3033",
-    "build": "next build",
-    "start": "next start --port 3033",
-    "typecheck": "tsc --noEmit"
+    "dev": "node node_modules/next/dist/bin/next dev --port 3033",
+    "build": "node node_modules/next/dist/bin/next build",
+    "start": "node node_modules/next/dist/bin/next start --port 3033",
+    "typecheck": "node node_modules/typescript/bin/tsc --noEmit"
   },
   "dependencies": {
     "next": "^16.0.0",
