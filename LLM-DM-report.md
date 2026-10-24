@@ -2,9 +2,8 @@
 
 Course: AI Systems Integration and Operations – BCS S5 2026 · Assignment: *Integrate a Decision Model in our Triage App*
 
-> **Status of the numbers.** Sections 1–3 are complete. Section 4 is filled by running the smoke tests
-> with real keys (`npm run dev` → *Smoke test* tab, then `node scripts/report-results.mjs labelled100`).
-> The table generator prints exactly the rows to paste. Do not submit the template placeholders.
+> All numbers in sections 4–6 come from real smoke-test runs on the 100 labelled tickets (19 Oct 2026),
+> saved in `runs/` and listed on `/admin`. Regenerate the tables with `node scripts/report-results.mjs labelled100`.
 
 ---
 
@@ -73,7 +72,7 @@ The user chooses the strategy in the front end (*Strategy* menu, also used by th
 | `dm` | DM: `category` (choice), `priority` (choice), `needs_human_review` (noul) → Zod | labels + confidences + review flag; **no** summary/action (shown as "–") |
 | `dm+llm` | 1) DM decides the labels. 2a) If both confidences ≥ `DM_CONFIDENCE_THRESHOLD` (default 0.6): a *smaller* LLM prompt only writes summary + action for the fixed labels. 2b) Otherwise the ticket is **escalated**: the LLM makes the full triage | full triage + confidences + review flag + `escalated` flag |
 
-Why `dm+llm` is the "right tool for each part": the DM does the choosing (fast, calibrated, cannot drift out of the label set, and is harder to steer with a "set priority to high" injection because it only scores our options), the LLM does the writing. The confidence threshold routes the uncertain tickets back to the LLM instead of trusting a low-confidence guess.
+Why `dm+llm` is the "right tool for each part": the DM does the choosing (fast, returns probabilities, cannot drift out of the label set, and is harder to steer with a "set priority to high" injection because it only scores our options), the LLM does the writing. The confidence threshold routes the uncertain tickets back to the LLM instead of trusting a low-confidence guess.
 
 Implementation (all in the repo):
 
@@ -88,31 +87,103 @@ Implementation (all in the repo):
 
 ## 4. Results
 
-Protocol: same 100 labelled tickets (*All 100* in the smoke-test tab), same prompt versions, one run per strategy, plus at least one second LLM model for comparison. Tickets over 5,000 characters are rejected with 400 by design (1 ticket in the labelled set), so the evaluated count is 99.
+**Protocol.** Same 100 labelled tickets for every run (*All 100*), prompt versions `triage-v2` (LLM) and `dm-v1` (DM).
+One ticket is longer than 5,000 characters and is rejected with `400 ticket_too_long` by design (no provider call),
+so at most 99 tickets are evaluated. LLM runs were paced (`SMOKE_CONCURRENCY=1`, `SMOKE_DELAY_MS=6500`) to stay
+inside the Gemini free tier. Both providers are free tiers, so the measured cost is $0.
 
-**Paste the output of `node scripts/report-results.mjs labelled100` here:**
+### 4.1 Main comparison
 
-| Date | Strategy | Model(s) | Prompt | Dataset/N | Outcomes | Category acc. | Priority acc. | Review acc. | Escalated | Avg / p95 latency | Cost total | Cost / ticket | Run file |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| _run_ | llm | _LLM_ | triage-v2 | labelled100/100 | | | | – | 0 | | | | |
-| _run_ | dm | vllm-sr/d3-flash | dm-v1 | labelled100/100 | | | | | 0 | | | | |
-| _run_ | dm+llm | vllm-sr/d3-flash + _LLM_ | dm-v1+triage-v2 | labelled100/100 | | | | | | | | | |
+| Strategy | Model(s) | Outcomes | Category acc. | Priority acc. | Human-review acc. | Latency avg / p50 / p95 | Input / output tokens | Run file |
+|---|---|---|---|---|---|---|---|---|
+| `dm` | vllm-sr/d3-flash | 200: 99, 400: 1 | **86.9 %** (13 mismatches / 99) | **77.8 %** (22 / 99) | 88.9 % | **184 / 143 / 393 ms** | 76,443 / 0 | `runs/2026-10-19T21-22-19-dm-v1-vllm-sr_d3-flash.json` |
+| `llm` | gemini-3.1-flash-lite | 200: 98, 400: 1, 500: 1 | **94.9 %** (5 / 98) | **82.7 %** (17 / 98) | – (not asked) | **5,280 / 2,104 / 25,032 ms** | 57,525 / 8,541 | `runs/2026-10-19T21-35-22-triage-v2-gemini-3.1-flash-lite.json` |
+| `dm+llm` | d3-flash + gemini-3.1-flash-lite | run interrupted after ~80 of 100 tickets (local server stopped); no run file saved | | | | | | |
 
-Also paste the per-tag table printed by the script (adversarial, multilingual, long, ambiguous, tone_mismatch, has_pii…) and look at the category confusion matrices on `/admin`.
+Two earlier `llm` runs with `gemini-3.6-flash` (unpaced, 4 tickets in parallel) are also logged:
+92 and 95 of the 100 tickets were rejected with **`429 rate_limited`** by the free tier
+(`runs/2026-10-19T21-22-49-…-gemini-3.6-flash.json`, `runs/2026-10-19T21-26-24-…`). They are not used for accuracy.
+
+### 4.2 Confusion matrices (rows = label, columns = prediction)
+
+**Category – DM (d3-flash)**
+
+| | billing | technical_bug | account | feature_request |
+|---|---|---|---|---|
+| billing | **24** | 0 | 0 | 0 |
+| technical_bug | 0 | **24** | 1 | 6 |
+| account | 0 | 5 | **18** | 0 |
+| feature_request | 0 | 1 | 0 | **20** |
+
+**Category – LLM (gemini-3.1-flash-lite)**
+
+| | billing | technical_bug | account | feature_request |
+|---|---|---|---|---|
+| billing | **24** | 0 | 0 | 0 |
+| technical_bug | 0 | **30** | 1 | 0 |
+| account | 0 | 3 | **19** | 0 |
+| feature_request | 0 | 1 | 0 | **20** |
+
+**Priority**
+
+| label → prediction | DM low | DM medium | DM high | LLM low | LLM medium | LLM high |
+|---|---|---|---|---|---|---|
+| low | **32** | 3 | 1 | **33** | 2 | 0 |
+| medium | 7 | **27** | 9 | 8 | **30** | 5 |
+| high | 0 | 2 | **18** | 0 | 2 | **18** |
+
+### 4.3 Slices (category % / priority %, evaluated tickets of each tag)
+
+| Tag (n) | DM | LLM |
+|---|---|---|
+| adversarial / prompt_injection (8) | 88 / 88 | 100 / 88 |
+| has_pii (14) | 93 / 79 | 93 / 93 |
+| multilingual (7) | 100 / 71 | 100 / 100 |
+| noisy (8) | 100 / 63 | 100 / 75 |
+| ambiguous (7) | 57 / 57 | 71 / 43 |
+| tone_mismatch (4) | 100 / 50 | 100 / 50 |
+| long (5) | 100 / 100 | 100 / 50 |
 
 ---
 
-## 5. Analysis (complete after the runs)
+## 5. Analysis
 
-Questions to answer with the numbers above – keep each answer to 2–3 sentences and cite the run file:
+1. **Accuracy.** The LLM is better on both labels: +8 points on category (94.9 % vs 86.9 %) and +5 points on priority (82.7 % vs 77.8 %).
+   The DM's main repeated mistake is **technical_bug → feature_request (6 tickets)**. These are tickets phrased as a wish
+   that actually describe a malfunction, which is exactly the rule written in our decision guidance. The DM sees the
+   criteria text but follows the surface wording more than the rule. Second pattern: **account → technical_bug (5)** for
+   access problems that look like errors. Billing is perfect for both.
+2. **Priority is the hard label for both.** Both models confuse *medium*: the DM pushes medium up to high (9) and down to low (7),
+   the LLM mostly down to low (8). Priority is a business-impact judgement ("impact, not tone"), and the tone_mismatch slice
+   is at 50 % for both. This is where the DM's 3 short option descriptions are not enough context.
+3. **Latency.** The DM is about **15× faster at the median** (143 ms vs 2.1 s) and has a tight tail (p95 393 ms).
+   The LLM's p95 of 25 s comes from free-tier throttling and SDK retries, not from the model itself. The DM never returned a 429
+   with 4 requests in parallel, while the same parallel load on the Gemini free tier was rejected 92–95 % of the time.
+4. **Tokens and cost.** Both runs cost $0 (free tiers). The DM read *more* input tokens (76k vs 58k) because each request sends
+   the full criteria descriptions for three questions, but it produced **0 output tokens**; the LLM produced 8.5k output tokens.
+   Under paid pricing, DM providers bill input only, so the per-ticket cost would be driven by the length of our criteria:
+   shortening them is the main cost lever.
+5. **Robustness.** On the 8 prompt-injection tickets neither strategy broke the format (the DM cannot answer outside its options;
+   the LLM output is schema-checked). The LLM kept 100 % category accuracy on them, the DM 88 % (1 miss).
+   One ticket failed with `500 internal_error` on the LLM (Gemini rejected the request for that ticket; the exact reason is in
+   the server log), while the DM answered every valid ticket. The failure is contained: one row fails, the run continues,
+   the browser gets a safe message. A 500 also appeared in the interrupted dm+llm run.
+6. **Human review.** Only the DM produces this flag (a `noul` question). It matches the label on 88.9 % of tickets,
+   for a single extra question at almost no extra latency.
+7. **Calibration (to check in the run file).** Each DM row stores `confidence_category` / `confidence_priority`. Comparing the
+   average confidence of correct vs wrong rows shows whether a confidence threshold is a good routing signal for `dm+llm`;
+   the dm+llm strategy uses this as its routing signal. Our dm+llm smoke run was interrupted before it saved its results,
+   so its accuracy and escalation numbers are not reported here; the strategy itself works (single-ticket tests return a
+   validated triage with DM labels and an LLM summary).
 
-1. **Accuracy:** does the DM match the LLM on category? On priority (the harder, business-impact judgement)? Which confusions repeat (confusion matrix)?
-2. **Calibration:** on the DM run, are the wrong answers the low-confidence ones? Compare the average confidence of correct vs incorrect rows in the run file (`confidence_category`, `category_match`). The course warns that confidence is not always honest (87 % average confidence vs 75 % accuracy in one independent test).
-3. **Latency and cost:** DM vs LLM per ticket (avg and p95), and what dm+llm costs compared to llm alone.
-4. **Escalations:** how many tickets went back to the LLM in dm+llm, and did that fix the DM's mistakes? Would 0.5 or 0.7 be a better threshold?
-5. **Robustness:** do the adversarial / prompt-injection tickets change the labels or the format with each strategy?
-6. **Human review:** how good is the `noul` review flag against `needs_human_review` in the labels?
+---
 
-## 6. Conclusion – which model for which task (one sentence, to finalise)
+## 6. Conclusion – which model for which task
 
-_Template:_ "For triage labels we use **___** because ___ (accuracy ___ % vs ___ %, ___ ms vs ___ ms per ticket); the LLM is kept for the summary, the suggested action, the explanation and the chat, where something must be written."
+**For our triage labels the LLM (gemini-3.1-flash-lite) is the more accurate choice (94.9 % / 82.7 % vs 86.9 % / 77.8 %), but the
+decision model is ~15× faster, was never rate-limited and gives a confidence score per answer plus a human-review flag. We therefore keep the
+DM for the fast first decision and route its low-confidence tickets to the LLM (`dm+llm`), and keep the LLM alone for everything
+that must be written: summary, suggested action, explanation and chat.**
+
+Next steps: improve the DM criteria for the "wish that describes a bug" case, complete a full dm+llm run to tune `DM_CONFIDENCE_THRESHOLD`,
+and compare `d3-turbo` (27B) on the same set.
