@@ -1,106 +1,103 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import ChatPanel from "./ui/ChatPanel";
+import TriagePanel from "./ui/TriagePanel";
+import SmokePanel from "./ui/SmokePanel";
+import type { Strategy } from "@/lib/schema";
 
-type Message = {
-  role: "user" | "assistant";
-  text: string;
+export type Configs = {
+  llm: { id: string; label: string; structuredMode: string }[];
+  dm: { label: string; apiFormat: string; threshold: number } | null;
+  maxTicketChars: number;
 };
 
-export default function ChatPage() {
-  const [text, setText] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [isSending, setIsSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+type Tab = "chat" | "triage" | "smoke";
 
-  async function sendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (isSending || !text.trim()) return;
+export default function Home() {
+  const [tab, setTab] = useState<Tab>("triage");
+  const [configs, setConfigs] = useState<Configs | null>(null);
+  const [configId, setConfigId] = useState<string>("");
+  const [strategy, setStrategy] = useState<Strategy>("llm");
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-    const message = text;
-    setIsSending(true);
-    setError(null);
+  useEffect(() => {
+    fetch("/api/configs")
+      .then((r) => r.json())
+      .then((c: Configs) => {
+        setConfigs(c);
+        setConfigId(c.llm[0]?.id ?? "");
+      })
+      .catch(() => setLoadError("Could not load the server configuration."));
+  }, []);
 
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
-      });
-      const data: unknown = await response.json();
-
-      if (!response.ok) {
-        const detail =
-          typeof data === "object" &&
-          data !== null &&
-          "error" in data &&
-          typeof data.error === "string"
-            ? data.error
-            : "Unable to send your message. Please try again.";
-        throw new Error(detail);
-      }
-
-      if (
-        typeof data !== "object" ||
-        data === null ||
-        !("answer" in data) ||
-        typeof data.answer !== "string"
-      ) {
-        throw new Error("The server returned an invalid reply. Please try again.");
-      }
-
-      const answer = data.answer;
-      setMessages((previous) => [
-        ...previous,
-        { role: "user", text: message },
-        { role: "assistant", text: answer },
-      ]);
-      setText("");
-    } catch (error) {
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Unable to send your message. Please try again.",
-      );
-    } finally {
-      setIsSending(false);
-    }
-  }
+  const strategyNeedsLlm = strategy !== "dm";
+  const strategyNeedsDm = strategy !== "llm";
+  const notReady =
+    !!configs && ((strategyNeedsLlm && configs.llm.length === 0) || (strategyNeedsDm && !configs.dm));
 
   return (
-    <main className="chat">
-      <h1>Support chat</h1>
-      <p>Send a message and get an echo reply.</p>
-      <section
-        className="messages"
-        role="log"
-        aria-label="Chat messages"
-        aria-live="polite"
-      >
-        {messages.length === 0 && <p>No messages yet.</p>}
-        {messages.map((message, index) => (
-          <div className={`message ${message.role}`} key={index}>
-            <strong>{message.role === "user" ? "You" : "Assistant"}</strong>
-            <p>{message.text}</p>
-          </div>
-        ))}
+    <main className="app">
+      <header className="topbar">
+        <div>
+          <h1>Support Triage</h1>
+          <p className="muted">Kestrel Analytics support desk</p>
+        </div>
+        <Link href="/admin" className="adminlink">
+          /admin
+        </Link>
+      </header>
+
+      <section className="settings" aria-label="Model settings">
+        <label>
+          LLM model
+          <select value={configId} onChange={(e) => setConfigId(e.target.value)} disabled={!configs?.llm.length}>
+            {configs?.llm.length ? (
+              configs.llm.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label} ({c.structuredMode})
+                </option>
+              ))
+            ) : (
+              <option value="">no LLM configured</option>
+            )}
+          </select>
+        </label>
+        <label>
+          Strategy
+          <select value={strategy} onChange={(e) => setStrategy(e.target.value as Strategy)}>
+            <option value="llm">LLM only</option>
+            <option value="dm">Decision model only</option>
+            <option value="dm+llm">Decision model + LLM</option>
+          </select>
+        </label>
+        <p className="muted small">
+          Decision model: {configs?.dm ? `${configs.dm.label} (${configs.dm.apiFormat}, escalate below ${configs.dm.threshold})` : "not configured"}
+        </p>
+        {notReady && <p role="alert">This strategy needs a model that is not configured on the server.</p>}
+        {loadError && <p role="alert">{loadError}</p>}
       </section>
-      <form onSubmit={sendMessage} aria-busy={isSending}>
-        <label htmlFor="message">Your message</label>
-        <textarea
-          id="message"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          placeholder="Describe what you need help with..."
-          rows={3}
-          required
-          disabled={isSending}
-        />
-        <button type="submit" disabled={isSending || !text.trim()}>
-          {isSending ? "Sending..." : "Send"}
-        </button>
-        {error && <p role="alert">{error}</p>}
-      </form>
+
+      <nav className="tabs" role="tablist">
+        {(["chat", "triage", "smoke"] as Tab[]).map((t) => (
+          <button
+            key={t}
+            role="tab"
+            aria-selected={tab === t}
+            className={tab === t ? "tab active" : "tab"}
+            onClick={() => setTab(t)}
+          >
+            {t === "chat" ? "Chat" : t === "triage" ? "Triage" : "Smoke test"}
+          </button>
+        ))}
+      </nav>
+
+      {tab === "chat" && <ChatPanel configId={configId} />}
+      {tab === "triage" && (
+        <TriagePanel configId={configId} strategy={strategy} maxChars={configs?.maxTicketChars ?? 5000} />
+      )}
+      {tab === "smoke" && <SmokePanel configId={configId} strategy={strategy} />}
     </main>
   );
 }
